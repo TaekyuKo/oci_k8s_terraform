@@ -8,14 +8,14 @@ Oracle Cloud Infrastructure (OCI) 프리티어를 활용한 Kubernetes 클러스
 
 - **네트워크**: VCN, Public Subnet, Internet Gateway
 - **보안**: Security List (Kubernetes 전용 포트 구성)
-- **컴퓨트**: Master 노드 (Public), Worker 노드 (Public)
+- **컴퓨트**: Master 노드 (Reserved Public IP), Worker 노드 (Ephemeral Public IP)
 - **스토리지**: 각 노드에 50GB Block Volume 자동 마운트 (`/data`)
 - **Kubernetes**: containerd, kubeadm, kubelet, kubectl 자동 설치
 
 ## 🎯 주요 특징
 
-- ✅ **완전 무료**: NAT Gateway 제거로 프리티어 한도 내 과금 $0
-- ✅ **간단한 구조**: Public Subnet 하나로 모든 노드 관리
+- ✅ **완전 무료**: 프리티어 한도 내 과금 $0
+- ✅ **Master 고정 IP**: Reserved Public IP로 재부팅 후에도 동일 IP 유지
 - ✅ **자동화**: Terraform + Cloud-Init으로 원클릭 배포
 - ✅ **학습용 최적화**: 복잡한 네트워크 없이 Kubernetes 학습에 집중
 
@@ -84,15 +84,15 @@ terraform apply
 ```
 Outputs:
 
-master_node_public_ip = "132.145.xxx.xxx"
+master_node_public_ip = "132.145.xxx.xxx"  (Reserved IP - 재부팅 후에도 유지)
 master_node_private_ip = "10.0.1.2"
-worker_node_public_ip = "138.2.xxx.xxx"
+worker_node_public_ip = "138.2.xxx.xxx"  (Ephemeral IP - 재부팅 시 변경 가능)
 worker_node_private_ip = "10.0.1.3"
 ssh_connection_commands = <<EOT
-    # Master 노드 직접 접속
+    # Master 노드 직접 접속 (Reserved IP)
     ssh ubuntu@132.145.xxx.xxx
     
-    # Worker 노드 직접 접속
+    # Worker 노드 직접 접속 (Ephemeral IP)
     ssh ubuntu@138.2.xxx.xxx
 EOT
 ```
@@ -101,7 +101,7 @@ EOT
 
 #### 4-1. Master 노드 접속
 ```bash
-# 출력된 Public IP로 접속
+# 출력된 Reserved Public IP로 접속
 ssh ubuntu@<master_node_public_ip>
 ```
 
@@ -160,12 +160,14 @@ kubeadm token create --print-join-command
 
 #### 6-2. Worker 노드 접속
 ```bash
-# 새 터미널에서 Worker 노드 직접 접속
+# 새 터미널에서 Worker 노드 직접 접속 (Ephemeral IP 사용)
 ssh ubuntu@<worker_node_public_ip>
 
-# 또는 Master에서 SSH (Private IP 사용)
+# 또는 Master에서 SSH (Private IP 사용 - 추천)
 ssh ubuntu@<worker_node_private_ip>
 ```
+
+**참고**: Worker의 Ephemeral IP는 재부팅 시 변경될 수 있으므로, Master에서 Private IP로 접속하는 것을 권장합니다.
 
 #### 6-3. Worker 노드 검증
 ```bash
@@ -213,10 +215,10 @@ kubectl get svc nginx
 # NAME    TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)        AGE
 # nginx   NodePort   10.96.123.45    <none>        80:31234/TCP   10s
 
-# Master 노드의 Public IP로 접근 (브라우저 또는 curl)
+# Master 노드의 Reserved Public IP로 접근 (브라우저 또는 curl)
 curl http://<master_public_ip>:31234
 
-# Worker 노드의 Public IP로도 접근 가능
+# Worker 노드의 Ephemeral Public IP로도 접근 가능
 curl http://<worker_public_ip>:31234
 ```
 
@@ -228,7 +230,8 @@ curl http://<worker_public_ip>:31234
 | **Memory** | 24GB (2 인스턴스 × 12GB) | 24GB |
 | **Block Volume** | 100GB (2개 × 50GB) | 200GB |
 | **Boot Volume** | 100GB (2개 × 50GB) | 별도 계산 |
-| **Public IP (Ephemeral)** | 2개 (무제한 무료) | 무제한 |
+| **Reserved Public IP** | 1개 (Master 노드) | 1개 |
+| **Ephemeral Public IP** | 1개 (Worker 노드) | 무제한 |
 | **VCN** | 1개 | 2개 |
 | **Outbound 데이터 전송** | 사용량에 따라 | 10TB/월 |
 
@@ -242,18 +245,29 @@ curl http://<worker_public_ip>:31234
 Internet Gateway (무료)
   ↕
 Public Subnet (10.0.1.0/24)
-  ├─ k8s-master (10.0.1.x) + Public IP
+  ├─ k8s-master (10.0.1.x) + Reserved Public IP (고정)
   │   └─ Block Volume 50GB → /data
   │
-  └─ k8s-worker (10.0.1.x) + Public IP
+  └─ k8s-worker (10.0.1.x) + Ephemeral Public IP (임시)
       └─ Block Volume 50GB → /data
 ```
 
+### IP 할당 전략
+- **Master 노드**: Reserved Public IP 사용
+  - ✅ 재부팅 후에도 동일 IP 유지
+  - ✅ 안정적인 API Server 접근
+  - ✅ 프리티어 한도: 1개 (1개 사용)
+  
+- **Worker 노드**: Ephemeral Public IP 사용
+  - ✅ 재부팅 시 IP 변경 가능 (문제 없음)
+  - ✅ 무제한 무료
+  - ✅ 스케일링 유연성
+
 ### 특징
 - ✅ NAT Gateway 없음 → 과금 $0
-- ✅ 모든 노드가 Public IP 보유 → 직접 접근 가능
 - ✅ Security List로 보안 제어 (admin IP만 SSH/API 접근)
 - ✅ VCN 내부(10.0.0.0/16) 통신 전체 허용 → Pod 간 통신 원활
+- ✅ Master는 고정 IP, Worker는 Private IP로 통신
 
 ## 🔧 커스터마이징
 
@@ -273,6 +287,8 @@ instance_memory = 6   # OCPU당 1~24GB (최소 OCPU × 1GB)
 
 ### Worker 노드 추가
 
+Worker 노드는 Ephemeral IP를 사용하므로 개수 제한 없이 추가할 수 있습니다 (OCPU/메모리 한도 내에서).
+
 `main.tf`에서 Worker 노드 블록을 복사하여 추가:
 
 ```hcl
@@ -290,7 +306,7 @@ resource "oci_core_instance" "k8s_worker2" {
   
   create_vnic_details {
     subnet_id                 = oci_core_subnet.public_subnet.id
-    assign_public_ip          = true
+    assign_public_ip          = true  # Ephemeral IP
     assign_private_dns_record = true
     skip_source_dest_check    = true
   }
@@ -369,7 +385,9 @@ terraform show
 # 출력이 비어있으면 모든 리소스 삭제 완료
 ```
 
-**주의**: Block Volume의 데이터는 영구적으로 삭제됩니다. 필요한 데이터는 미리 백업하세요.
+**주의**: 
+- Block Volume의 데이터는 영구적으로 삭제됩니다. 필요한 데이터는 미리 백업하세요.
+- Reserved Public IP도 함께 삭제됩니다.
 
 ## 📚 참고 문서
 
@@ -382,8 +400,10 @@ terraform show
 ## ⚠️ 주의사항
 
 1. **프리티어 한도**: 이 프로젝트는 프리티어 OCPU/메모리를 100% 사용합니다. 추가 인스턴스 생성 시 과금됩니다.
-2. **보안**: `admin_ip_cidr`를 본인의 IP로 제한하는 것을 권장합니다. 학습용이라면 `0.0.0.0/0`도 가능하지만 보안에 주의하세요.
-3. **Region**: 프리티어는 Home Region에서만 사용 가능합니다.
-4. **데이터 백업**: `terraform destroy` 시 Block Volume도 함께 삭제됩니다.
-5. **비용**: 프리티어 범위 내에서만 사용하면 완전 무료입니다.
-6. **부트스트랩 시간**: 인스턴스 생성 후 5-10분간 자동 설치가 진행됩니다. 바로 접속해도 설치가 완료되지 않았을 수 있습니다.
+2. **Reserved IP 한도**: Master 노드에 1개 사용 (프리티어 한도: 2개). 추가 Reserved IP 필요 시 1개 더 생성 가능합니다.
+3. **Worker IP 변경**: Worker 노드의 Ephemeral IP는 재부팅 시 변경될 수 있습니다. Master에서 Private IP로 접속하세요.
+4. **보안**: `admin_ip_cidr`를 본인의 IP로 제한하는 것을 권장합니다. 학습용이라면 `0.0.0.0/0`도 가능하지만 보안에 주의하세요.
+5. **Region**: 프리티어는 Home Region에서만 사용 가능합니다.
+6. **데이터 백업**: `terraform destroy` 시 Block Volume과 Reserved IP도 함께 삭제됩니다.
+7. **비용**: 프리티어 범위 내에서만 사용하면 완전 무료입니다.
+8. **부트스트랩 시간**: 인스턴스 생성 후 5-10분간 자동 설치가 진행됩니다. 바로 접속해도 설치가 완료되지 않았을 수 있습니다.

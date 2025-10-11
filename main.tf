@@ -142,6 +142,16 @@ resource "oci_core_security_list" "k8s_sl" {
 }
 
 # =================================================================
+# Reserved Public IP (Master Node용)
+# =================================================================
+
+resource "oci_core_public_ip" "master_reserved_ip" {
+  compartment_id = var.compartment_ocid
+  lifetime       = "RESERVED"
+  display_name   = "k8s-master-reserved-ip"
+}
+
+# =================================================================
 # 컴퓨트 및 스토리지 (Compute & Storage)
 # =================================================================
 
@@ -159,7 +169,7 @@ resource "oci_core_instance" "k8s_master" {
   
   create_vnic_details {
     subnet_id                 = oci_core_subnet.public_subnet.id
-    assign_public_ip          = true
+    assign_public_ip          = false  # Reserved IP 사용하므로 false
     assign_private_dns_record = true
     skip_source_dest_check    = true
   }
@@ -179,6 +189,26 @@ resource "oci_core_instance" "k8s_master" {
     create = "30m"
     delete = "30m"
   }
+}
+
+# Master Node에 Reserved IP 할당
+resource "oci_core_public_ip" "master_ip_assignment" {
+  compartment_id = var.compartment_ocid
+  lifetime       = "RESERVED"
+  display_name   = "k8s-master-reserved-ip"
+  private_ip_id  = data.oci_core_private_ips.master_private_ip.private_ips[0].id
+
+  depends_on = [oci_core_instance.k8s_master]
+}
+
+# Master Node의 Private IP 가져오기
+data "oci_core_private_ips" "master_private_ip" {
+  vnic_id = data.oci_core_vnic_attachments.master_vnic_attachment.vnic_attachments[0].vnic_id
+}
+
+data "oci_core_vnic_attachments" "master_vnic_attachment" {
+  compartment_id      = var.compartment_ocid
+  instance_id         = oci_core_instance.k8s_master.id
 }
 
 # Master Node Block Volume
@@ -214,7 +244,7 @@ resource "oci_core_instance" "k8s_worker" {
   
   create_vnic_details {
     subnet_id                 = oci_core_subnet.public_subnet.id
-    assign_public_ip          = true
+    assign_public_ip          = true  # Ephemeral IP 사용
     assign_private_dns_record = true
     skip_source_dest_check    = true
   }
