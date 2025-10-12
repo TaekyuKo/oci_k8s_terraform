@@ -1,4 +1,4 @@
-# ---------------- OCI 인증 정보 변수 ----------------
+# ---------------- OCI 인증 정보 ----------------
 variable "tenancy_ocid" {
   type        = string
   description = "OCI Tenancy OCID."
@@ -20,7 +20,7 @@ variable "region" {
   description = "OCI Region for the resources."
 }
 
-# ---------------- 공통 리소스 변수 ----------------
+# ---------------- 공통 리소스 ----------------
 variable "compartment_ocid" {
   type        = string
   description = "Compartment OCID where resources will be created."
@@ -36,7 +36,7 @@ variable "admin_ip_cidr" {
 }
 
 
-# ---------------- 인스턴스 사양 변수 ----------------
+# ---------------- 인스턴스 사양----------------
 variable "instance_shape" {
   type    = string
   default = "VM.Standard.A1.Flex"

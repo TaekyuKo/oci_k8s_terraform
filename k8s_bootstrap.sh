@@ -176,14 +176,11 @@ MAX_WAIT=180
 COUNTER=0
 
 while [ $COUNTER -lt $MAX_WAIT ]; do
-    # OCI 메타데이터에서 iSCSI 볼륨 정보 가져오기
     ISCSI_INFO=$(curl -s -H "Authorization: Bearer Oracle" "${METADATA_URL}iscsiVolumeAttachments/" 2>/dev/null || echo "")
     
-    # 볼륨이 연결되어 있는지 확인
     if [ -n "$ISCSI_INFO" ] && [ "$ISCSI_INFO" != "[]" ]; then
         echo "Block Volume attachment detected, configuring iSCSI..."
         
-        # JSON에서 iSCSI 연결 정보 추출
         IQN=$(echo "$ISCSI_INFO" | grep -oP '"iqn":\s*"\K[^"]+' | head -1)
         IPADDR=$(echo "$ISCSI_INFO" | grep -oP '"ipv4":\s*"\K[^"]+' | head -1)
         PORT=$(echo "$ISCSI_INFO" | grep -oP '"port":\s*\K[0-9]+' | head -1)
@@ -191,20 +188,15 @@ while [ $COUNTER -lt $MAX_WAIT ]; do
         if [ -n "$IQN" ] && [ -n "$IPADDR" ]; then
             echo "Connecting to iSCSI target: $IQN at $IPADDR:$PORT"
             
-            # iSCSI 타겟 노드 생성
             sudo iscsiadm -m node -o new -T "$IQN" -p "$IPADDR:$PORT"
-            # 부팅 시 자동 연결 설정
             sudo iscsiadm -m node -o update -T "$IQN" -n node.startup -v automatic
-            # iSCSI 타겟 로그인 (볼륨 연결)
             sudo iscsiadm -m node -T "$IQN" -p "$IPADDR:$PORT" -l
             
-            # 디바이스가 나타날 때까지 대기
+
             echo "Waiting for device to appear..."
             
-            # *** Boot Volume 식별 (디바이스 검색 전 먼저 수행) ***
             ROOT_DEVICE=$(lsblk -no PKNAME $(findmnt -n -o SOURCE /) 2>/dev/null || echo "")
             if [ -z "$ROOT_DEVICE" ]; then
-                # Fallback: findmnt가 실패하면 df 사용
                 ROOT_DEVICE=$(df / | tail -1 | awk '{print $1}' | sed 's/[0-9]*$//' | sed 's|/dev/||')
             fi
             ROOT_DEVICE_PATH="/dev/${ROOT_DEVICE}"
@@ -215,11 +207,9 @@ while [ $COUNTER -lt $MAX_WAIT ]; do
             DEVICE=""
 
             while [ $DEVICE_WAIT -lt $MAX_DEVICE_WAIT ]; do
-                # 디스크 타입 디바이스만 필터링 (개선: awk로 한 번에 처리)
                 NEW_DEVICES=$(lsblk -d -n -o NAME,TYPE 2>/dev/null | awk '$2=="disk" {print "/dev/"$1}')
     
                 for dev in $NEW_DEVICES; do
-                    # 루트 디바이스가 아니고 마운트되지 않은 디바이스 찾기
                     if [ "$dev" != "$ROOT_DEVICE_PATH" ] && ! mount | grep -q "^$dev"; then
                         DEVICE=$dev
                         echo "Block device detected: $DEVICE"
@@ -234,15 +224,11 @@ while [ $COUNTER -lt $MAX_WAIT ]; do
             if [ -z "$DEVICE" ]; then
                 echo "⚠ Warning: Block Volume device not detected after ${MAX_DEVICE_WAIT}s"
                 
-                # 추가 시도: /dev/sd[b-z] 또는 /dev/nvme[1-9]n1 직접 확인
                 echo "Attempting to find block device manually..."
                 for dev in /dev/sd[b-z] /dev/nvme[1-9]n1; do
                     if [ -e "$dev" ]; then
-                        # 디스크 타입만 확인 (파티션 제외)
                         if [ "$(lsblk -no TYPE "$dev" 2>/dev/null)" = "disk" ]; then
-                            # 루트 디바이스 제외
                             if [ "$dev" != "$ROOT_DEVICE_PATH" ]; then
-                                # 이미 마운트되어 있는지 확인
                                 if ! mount | grep -q "^$dev"; then
                                     DEVICE=$dev
                                     echo "Found available block device: $DEVICE"
@@ -259,7 +245,6 @@ while [ $COUNTER -lt $MAX_WAIT ]; do
                 
                 echo "Configuring Block Volume: $DEVICE"
                 
-                # 기존 파일시스템 확인
                 if ! sudo blkid "$DEVICE" | grep -q "TYPE"; then
                     echo "Creating ext4 filesystem on $DEVICE..."
                     sudo mkfs.ext4 -F "$DEVICE"
@@ -267,22 +252,13 @@ while [ $COUNTER -lt $MAX_WAIT ]; do
                     echo "Filesystem already exists on $DEVICE"
                 fi
                 
-                # 마운트 포인트 생성
                 sudo mkdir -p "$MOUNT_POINT"
-                
-                # UUID 추출 (디바이스 경로 변경 대비)
                 UUID=$(sudo blkid -s UUID -o value "$DEVICE")
-                
-                # /etc/fstab에 자동 마운트 설정 추가
                 if ! grep -q "$UUID" /etc/fstab 2>/dev/null; then
-                    # nofail: 볼륨이 없어도 부팅 가능
-                    # _netdev: 네트워크 디바이스 (iSCSI)
                     echo "UUID=$UUID $MOUNT_POINT ext4 defaults,nofail,_netdev 0 2" | sudo tee -a /etc/fstab
                 fi
                 
-                # 마운트 실행
                 sudo mount -a
-                # ubuntu 사용자에게 권한 부여
                 sudo chown -R ubuntu:ubuntu "$MOUNT_POINT"
                 
                 echo "✓ Block Volume successfully mounted at $MOUNT_POINT"
@@ -306,7 +282,8 @@ if [ $COUNTER -ge $MAX_WAIT ]; then
     lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
 fi
 
-# 10. 시스템 검증 스크립트 설치
+
+# 10. 시스템 검증 스크립트
 cat <<'VERIFY_EOF' | sudo tee /usr/local/bin/verify-k8s-setup.sh
 #!/bin/bash
 echo "=== Kubernetes Setup Verification ==="

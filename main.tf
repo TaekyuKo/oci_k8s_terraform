@@ -169,7 +169,7 @@ resource "oci_core_instance" "k8s_master" {
   
   create_vnic_details {
     subnet_id                 = oci_core_subnet.public_subnet.id
-    assign_public_ip          = false  # Reserved IP 사용하므로 false
+    assign_public_ip          = false 
     assign_private_dns_record = true
     skip_source_dest_check    = true
   }
@@ -201,7 +201,6 @@ resource "oci_core_public_ip" "master_ip_assignment" {
   depends_on = [oci_core_instance.k8s_master]
 }
 
-# Master Node의 Private IP 가져오기
 data "oci_core_private_ips" "master_private_ip" {
   vnic_id = data.oci_core_vnic_attachments.master_vnic_attachment.vnic_attachments[0].vnic_id
 }
@@ -244,7 +243,7 @@ resource "oci_core_instance" "k8s_worker" {
   
   create_vnic_details {
     subnet_id                 = oci_core_subnet.public_subnet.id
-    assign_public_ip          = true  # Ephemeral IP 사용
+    assign_public_ip          = true
     assign_private_dns_record = true
     skip_source_dest_check    = true
   }
