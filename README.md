@@ -1,6 +1,26 @@
 # OCI 프리티어 Kubernetes 클러스터 자동화
 
+[![Terraform](https://img.shields.io/badge/Terraform-%3E%3D1.0-blue?logo=terraform)](https://www.terraform.io/)
+[![OCI](https://img.shields.io/badge/OCI-Free%20Tier-red?logo=oracle)](https://www.oracle.com/cloud/free/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.31-326CE5?logo=kubernetes)](https://kubernetes.io/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Oracle Cloud Infrastructure (OCI) 프리티어를 활용한 Kubernetes 클러스터 자동 배포 프로젝트입니다.
+
+## 📑 목차
+
+- [프로젝트 개요](#-프로젝트-개요)
+- [주요 특징](#-주요-특징)
+- [파일 구조](#-파일-구조)
+- [빠른 시작](#-빠른-시작)
+- [프리티어 리소스 사용량](#-프리티어-리소스-사용량)
+- [네트워크 아키텍처](#️-네트워크-아키텍처)
+- [커스터마이징](#-커스터마이징)
+- [트러블슈팅](#-트러블슈팅)
+- [리소스 정리](#-리소스-정리)
+- [참고 문서](#-참고-문서)
+- [Contributing](#-contributing)
+- [License](#-license)
 
 ## 📋 프로젝트 개요
 
@@ -18,6 +38,21 @@ Oracle Cloud Infrastructure (OCI) 프리티어를 활용한 Kubernetes 클러스
 - ✅ **Master 고정 IP**: Reserved Public IP로 재부팅 후에도 동일 IP 유지
 - ✅ **자동화**: Terraform + Cloud-Init으로 원클릭 배포
 - ✅ **학습용 최적화**: 복잡한 네트워크 없이 Kubernetes 학습에 집중
+- ✅ **ARM 아키텍처**: Ampere A1 프로세서 사용 (VM.Standard.A1.Flex)
+
+## 📁 파일 구조
+
+```
+oci_k8s_terraform/
+├── provider.tf         # OCI Provider 설정 및 인증
+├── variables.tf        # 입력 변수 정의
+├── main.tf             # 메인 리소스 (VCN, 인스턴스, 볼륨 등)
+├── outputs.tf          # 출력값 정의 (IP 주소 등)
+├── k8s_bootstrap.sh    # Cloud-Init 스크립트 (K8s 자동 설치)
+├── terraform.tfvars    # 변수 값 설정 (직접 생성 필요, .gitignore됨)
+├── .gitignore          # Git 제외 파일 목록
+└── README.md           # 프로젝트 문서
+```
 
 ## 🚀 빠른 시작
 
@@ -139,7 +174,7 @@ sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config
 
 # Calico CNI 설치 (Pod 네트워크 활성화)
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
 
 # 클러스터 상태 확인 (약 1-2분 후 Ready)
 kubectl get nodes
@@ -328,10 +363,7 @@ resource "oci_core_volume_attachment" "worker2_bv_attachment" {
   instance_id     = oci_core_instance.k8s_worker2.id
   volume_id       = oci_core_volume.worker2_bv.id
   display_name    = "k8s-worker2-bv-attachment"
-  
-  is_pv_encryption_in_transit_enabled = false
-  is_read_only                        = false
-  use_chap                            = false
+  device          = "/dev/oracleoci/oraclevdd"
 }
 ```
 
@@ -348,15 +380,47 @@ output "worker2_node_private_ip" {
 
 ### 다른 CNI 플러그인 사용
 
-**Flannel**:
+> ⚠️ **주의**: CNI는 하나만 설치해야 합니다. Calico 대신 다른 CNI를 사용하려면 `kubeadm init` 후 Calico 대신 아래 중 하나를 설치하세요.
+
+**Flannel** (가장 단순):
 ```bash
+# Flannel 설치 (pod-network-cidr: 10.244.0.0/16 사용 시)
 kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+```
+
+**Cilium** (eBPF 기반, 고성능):
+```bash
+# Cilium CLI 설치
+CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+CLI_ARCH=arm64  # ARM 인스턴스용 (x86_64면 amd64로 변경)
+curl -L --fail --remote-name-all \
+  https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz
+sudo tar xzvf cilium-linux-${CLI_ARCH}.tar.gz -C /usr/local/bin
+rm cilium-linux-${CLI_ARCH}.tar.gz
+
+# Cilium 설치
+cilium install
+
+# 설치 상태 확인
+cilium status --wait
+
+# 연결 테스트 (선택)
+cilium connectivity test
 ```
 
 **Weave Net**:
 ```bash
 kubectl apply -f https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml
 ```
+
+#### CNI 비교
+
+| CNI | 장점 | 단점 | 추천 상황 |
+|-----|------|------|-----------|
+| **Calico** | 안정적, NetworkPolicy 지원 | 메모리 사용량 중간 | 일반적인 사용 (기본 선택) |
+| **Flannel** | 가장 단순, 가벼움 | NetworkPolicy 미지원 | 최소 리소스, 학습용 |
+| **Cilium** | eBPF 기반, 고성능, 관측성 | 약간 무거움 | 고급 기능 필요 시 |
+| **Weave** | 설치 쉬움, 암호화 지원 | 성능 중간 | 멀티 클라우드 |
 
 ## 🧹 리소스 정리
 
@@ -374,7 +438,80 @@ terraform show
 - Block Volume의 데이터는 영구적으로 삭제됩니다. 필요한 데이터는 미리 백업하세요.
 - Reserved Public IP도 함께 삭제됩니다.
 
-## 📚 참고 문서
+## � 트러블슈팅
+
+### SSH 접속 불가
+```bash
+# 1. Security List 확인 - admin_ip_cidr이 본인 IP와 일치하는지 확인
+curl -s https://ipinfo.io/ip
+
+# 2. 인스턴스 상태 확인 - OCI 콘솔에서 RUNNING 상태인지 확인
+
+# 3. 부트스트랩 로그 확인 (접속 가능한 경우)
+sudo cat /var/log/k8s-bootstrap.log
+```
+
+### Block Volume 마운트 안됨
+```bash
+# 1. iSCSI 연결 상태 확인
+sudo iscsiadm -m session
+
+# 2. 사용 가능한 디스크 확인
+lsblk
+
+# 3. 수동 마운트 시도
+# iSCSI 정보 확인
+curl -H "Authorization: Bearer Oracle" http://169.254.169.254/opc/v2/instance/iscsiVolumeAttachments/
+
+# 디바이스 찾아서 마운트
+sudo mkfs.ext4 /dev/sdb  # 디바이스명 확인 후 실행
+sudo mount /dev/sdb /data
+```
+
+### kubeadm init 실패
+```bash
+# 1. containerd 상태 확인
+sudo systemctl status containerd
+
+# 2. swap 비활성화 확인
+free -h  # Swap이 0이어야 함
+
+# 3. 네트워크 설정 확인
+sudo sysctl net.bridge.bridge-nf-call-iptables  # 1이어야 함
+sudo sysctl net.ipv4.ip_forward                  # 1이어야 함
+
+# 4. 초기화 재시도 (기존 설정 제거 후)
+sudo kubeadm reset -f
+sudo rm -rf /etc/cni/net.d
+sudo rm -rf $HOME/.kube
+```
+
+### Worker 노드 Join 실패
+```bash
+# 1. Master 노드에서 새 토큰 생성
+kubeadm token create --print-join-command
+
+# 2. Worker에서 네트워크 연결 확인
+ping <master_private_ip>
+nc -zv <master_private_ip> 6443
+
+# 3. 시간 동기화 확인 (양쪽 노드)
+timedatectl status
+```
+
+### Pod가 Pending 상태
+```bash
+# 1. CNI 설치 확인
+kubectl get pods -n kube-system | grep calico
+
+# 2. 노드 상태 확인
+kubectl describe node <node-name>
+
+# 3. Pod 이벤트 확인
+kubectl describe pod <pod-name>
+```
+
+## �📚 참고 문서
 
 - [OCI 프리티어 공식 문서](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier.htm)
 - [OCI Terraform Provider](https://registry.terraform.io/providers/oracle/oci/latest/docs)
@@ -392,3 +529,17 @@ terraform show
 6. **데이터 백업**: `terraform destroy` 시 Block Volume과 Reserved IP도 함께 삭제됩니다.
 7. **비용**: 프리티어 범위 내에서만 사용하면 완전 무료입니다.
 8. **부트스트랩 시간**: 인스턴스 생성 후 5-10분간 자동 설치가 진행됩니다. 바로 접속해도 설치가 완료되지 않았을 수 있습니다.
+
+## 🤝 Contributing
+
+버그 리포트, 기능 제안, PR을 환영합니다!
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
