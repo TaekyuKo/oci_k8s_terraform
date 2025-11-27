@@ -142,16 +142,6 @@ resource "oci_core_security_list" "k8s_sl" {
 }
 
 # =================================================================
-# Reserved Public IP (Master Node용)
-# =================================================================
-
-resource "oci_core_public_ip" "master_reserved_ip" {
-  compartment_id = var.compartment_ocid
-  lifetime       = "RESERVED"
-  display_name   = "k8s-master-reserved-ip"
-}
-
-# =================================================================
 # 컴퓨트 및 스토리지 (Compute & Storage)
 # =================================================================
 
@@ -224,9 +214,8 @@ resource "oci_core_volume_attachment" "master_bv_attachment" {
   volume_id       = oci_core_volume.master_bv.id
   display_name    = "k8s-master-bv-attachment"
   
-  is_pv_encryption_in_transit_enabled = false
-  is_read_only                        = false
-  use_chap                            = false
+  # OCI 기본 설정 사용 (use_chap와 encryption은 기본값으로)
+  device          = "/dev/oracleoci/oraclevdb"
 }
 
 # --- Worker Node ---
@@ -279,7 +268,6 @@ resource "oci_core_volume_attachment" "worker_bv_attachment" {
   volume_id       = oci_core_volume.worker_bv.id
   display_name    = "k8s-worker-bv-attachment"
   
-  is_pv_encryption_in_transit_enabled = false
-  is_read_only                        = false
-  use_chap                            = false
+  # OCI 기본 설정 사용 (use_chap와 encryption은 기본값으로)
+  device          = "/dev/oracleoci/oraclevdc"
 }
