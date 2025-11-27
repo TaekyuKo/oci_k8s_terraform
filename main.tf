@@ -78,26 +78,26 @@ resource "oci_core_security_list" "k8s_sl" {
     description = "Allow all internal VCN traffic for Kubernetes."
   }
   
-  # SSH 접근 (관리자 IP만)
+  # SSH 접근 (SSH 키를 가진 모든 위치에서 접근 가능)
   ingress_security_rules {
     protocol    = "6"
-    source      = var.admin_ip_cidr
+    source      = "0.0.0.0/0"
     tcp_options { 
       min = 22 
       max = 22 
     }
-    description = "Allow SSH access from Admin IP."
+    description = "Allow SSH access from anywhere (key-based authentication)."
   }
   
-  # Kubernetes API Server 접근
+  # Kubernetes API Server 접근 (SSH 키를 가진 모든 위치에서 접근 가능)
   ingress_security_rules {
     protocol    = "6"
-    source      = var.admin_ip_cidr
+    source      = "0.0.0.0/0"
     tcp_options { 
       min = 6443 
       max = 6443 
     }
-    description = "Allow Kubernetes API access from Admin IP."
+    description = "Allow Kubernetes API access from anywhere (requires proper authentication)."
   }
   
   # ICMP (ping 테스트용)

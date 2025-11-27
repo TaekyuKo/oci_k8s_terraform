@@ -89,13 +89,10 @@ compartment_ocid = "ocid1.compartment.oc1..aaaaaaaxxxxx"
 
 # SSH 공개키 (본인의 SSH 공개키)
 ssh_public_key   = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ..."
-
-# 관리자 공인 IP (본인의 IP만 SSH/API 접근 가능하도록 제한)
-admin_ip_cidr    = "123.45.67.89/32"  # https://ipinfo.io 에서 확인
 ```
 
 #### 중요 참고사항
-- **admin_ip_cidr**: 본인의 공인 IP로 설정 (보안 권장, 학습용이면 `0.0.0.0/0`도 가능)
+- **SSH 접근**: SSH 프라이빗 키를 가진 모든 위치에서 접근 가능 (키 기반 인증)
 - **region**: 프리티어는 Home Region에서만 사용 가능
 - **ssh_public_key**: `~/.ssh/id_rsa.pub` 내용 복사 (없으면 `ssh-keygen`으로 생성)
 
@@ -524,7 +521,7 @@ kubectl describe pod <pod-name>
 1. **프리티어 한도**: 이 프로젝트는 프리티어 OCPU/메모리를 100% 사용합니다. 추가 인스턴스 생성 시 과금됩니다.
 2. **Reserved IP 한도**: Master 노드에 1개 사용 (프리티어 한도: 1개).
 3. **Worker IP 변경**: Worker 노드의 Ephemeral IP는 재부팅 시 변경될 수 있습니다.
-4. **보안**: `admin_ip_cidr`를 본인의 IP로 제한하는 것을 권장합니다. 학습용이라면 `0.0.0.0/0`도 가능하지만 보안에 주의하세요.
+4. **보안**: SSH는 모든 IP에서 접근 가능하지만 프라이빗 키를 가진 사용자만 인증됩니다. 키 관리에 주의하세요.
 5. **Region**: 프리티어는 Home Region에서만 사용 가능합니다.
 6. **데이터 백업**: `terraform destroy` 시 Block Volume과 Reserved IP도 함께 삭제됩니다.
 7. **비용**: 프리티어 범위 내에서만 사용하면 완전 무료입니다.

@@ -30,10 +30,7 @@ variable "ssh_public_key" {
   description = "Public SSH key for instance access."
   sensitive   = true
 }
-variable "admin_ip_cidr" {
-  type        = string
-  description = "CIDR block of the admin machine for SSH and kubectl access."
-}
+# admin_ip_cidr 변수 제거 - SSH 키 기반 인증으로 모든 위치에서 접근 허용
 
 
 # ---------------- 인스턴스 사양----------------
