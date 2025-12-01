@@ -7,21 +7,6 @@
 
 Oracle Cloud Infrastructure (OCI) 프리티어를 활용한 Kubernetes 클러스터 자동 배포 프로젝트입니다.
 
-## 📑 목차
-
-- [프로젝트 개요](#-프로젝트-개요)
-- [주요 특징](#-주요-특징)
-- [파일 구조](#-파일-구조)
-- [빠른 시작](#-빠른-시작)
-- [프리티어 리소스 사용량](#-프리티어-리소스-사용량)
-- [네트워크 아키텍처](#️-네트워크-아키텍처)
-- [커스터마이징](#-커스터마이징)
-- [트러블슈팅](#-트러블슈팅)
-- [리소스 정리](#-리소스-정리)
-- [참고 문서](#-참고-문서)
-- [Contributing](#-contributing)
-- [License](#-license)
-
 ## 📋 프로젝트 개요
 
 이 프로젝트는 Terraform을 사용하여 OCI 프리티어 환경에서 다음을 자동으로 구성합니다:
@@ -29,7 +14,7 @@ Oracle Cloud Infrastructure (OCI) 프리티어를 활용한 Kubernetes 클러스
 - **네트워크**: VCN, Public Subnet, Internet Gateway
 - **보안**: Security List (Kubernetes 전용 포트 구성)
 - **컴퓨트**: Master 노드 (Reserved Public IP), Worker 노드 (Ephemeral Public IP)
-- **스토리지**: 각 노드에 50GB Block Volume 자동 마운트 (`/data`)
+- **스토리지**: 각 노드에 50GB Block Volume 연결 (수동 마운트)
 - **Kubernetes**: containerd, kubeadm, kubelet, kubectl 자동 설치
 
 ## 🎯 주요 특징
@@ -65,36 +50,123 @@ terraform version  # 최소 v1.0 이상 필요
 ```
 
 #### OCI 계정 준비
-1. [OCI 콘솔](https://cloud.oracle.com)에 로그인
-2. **프리티어 활성화 확인** (Always Free Resources)
-3. **API Key 생성**:
-   - User Settings → API Keys → Add API Key
-   - Private Key 다운로드 (예: `~/.oci/oci_api_key.pem`)
-   - Configuration File Preview의 정보 복사
+
+**1. OCI 계정 및 프리티어 확인**
+- [OCI 콘솔](https://cloud.oracle.com)에 로그인
+- 프리티어 활성화 확인 (Always Free Resources)
+
+**2. API Key 생성 (Terraform이 OCI와 통신하기 위한 인증키)**
+
+OCI 콘솔에서:
+1. 우측 상단 프로필 아이콘 클릭 → **User Settings**
+2. 왼쪽 메뉴 **API Keys** → **Add API Key** 클릭
+3. **Generate API Key Pair** 선택
+4. **Download Private Key** 클릭 → 파일 저장 (예: `oci_api_key.pem`)
+   - Windows: `C:\Users\<username>\.oci\oci_api_key.pem`
+   - Linux/Mac: `~/.oci/oci_api_key.pem`
+5. **Add** 클릭
+6. **Configuration File Preview** 창에서 다음 정보 복사:
+   - `tenancy` (tenancy_ocid)
+   - `user` (user_ocid)
+   - `fingerprint`
+   - `region`
+
+**3. SSH Key 준비 (생성된 인스턴스에 접속하기 위한 키)**
+
+**방법 1: OCI 콘솔에서 생성 (가장 간단)**
+1. OCI 콘솔 → **Compute** → **Instances**
+2. **Create Instance** 페이지로 이동 (실제로 생성하지 않아도 됨)
+3. **Add SSH keys** 섹션에서 **Generate a key pair for me** 선택
+4. **Save Private Key** 클릭 → 프라이빗 키 저장 (예: `ssh-key-2025-12-01.key`)
+5. **Save Public Key** 클릭 → 퍼블릭 키 저장 (예: `ssh-key-2025-12-01.key.pub`)
+6. 퍼블릭 키 파일을 텍스트 에디터로 열어서 내용 전체 복사 (`ssh-rsa AAAA...`로 시작)
+
+**방법 2: 로컬에서 직접 생성**
+
+이미 SSH 키가 있다면 이 단계를 건너뛰세요.
+
+**Windows (PowerShell):**
+```powershell
+# SSH 키 생성
+ssh-keygen -t rsa -b 2048 -f $env:USERPROFILE\.ssh\id_rsa
+
+# 공개키 확인
+cat $env:USERPROFILE\.ssh\id_rsa.pub
+```
+
+**Linux/Mac:**
+```bash
+# SSH 키 생성
+ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa
+
+# 공개키 확인
+cat ~/.ssh/id_rsa.pub
+```
+
+출력되는 `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ...` 전체를 복사하세요.
 
 ### 2단계: 변수 설정
 
-`terraform.tfvars` 파일을 생성하고 본인의 OCI 정보를 입력:
+프로젝트 디렉토리에 `terraform.tfvars` 파일을 생성하고 위에서 준비한 정보를 입력합니다.
 
+**파일 생성:**
+```bash
+# 프로젝트 디렉토리로 이동
+cd oci_k8s_terraform
+
+# terraform.tfvars 파일 생성 (텍스트 에디터로)
+notepad terraform.tfvars  # Windows
+# 또는
+nano terraform.tfvars     # Linux/Mac
+```
+
+**파일 내용:**
 ```hcl
-# OCI 인증 정보 (API Key 생성 시 받은 정보)
-tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaxxxxx"
-user_ocid        = "ocid1.user.oc1..aaaaaaaxxxxx"
-fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
-private_key_path = "~/.oci/oci_api_key.pem"
-region           = "ap-seoul-1"  # 본인의 Home Region
+# ========================================
+# OCI 인증 정보
+# ========================================
 
-# Compartment (루트 compartment 사용 시 tenancy_ocid와 동일)
-compartment_ocid = "ocid1.compartment.oc1..aaaaaaaxxxxx"
+# OCI API Key 생성 시 받은 정보 (Configuration File Preview에서 복사)
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaxxxxx"     # tenancy 값
+user_ocid        = "ocid1.user.oc1..aaaaaaaxxxxx"        # user 값
+fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"  # fingerprint 값
+region           = "ap-seoul-1"  # region 값 (본인의 Home Region)
 
-# SSH 공개키 (본인의 SSH 공개키)
+# API Private Key 파일 경로 (다운로드한 oci_api_key.pem 파일 경로)
+private_key_path = "C:/Users/YourName/.oci/oci_api_key.pem"  # Windows 예시
+# private_key_path = "~/.oci/oci_api_key.pem"  # Linux/Mac 예시
+
+# ========================================
+# 리소스 설정
+# ========================================
+
+# Compartment OCID (루트 compartment 사용 시 tenancy_ocid와 동일)
+compartment_ocid = "ocid1.compartment.oc1..aaaaaaaxxxxx"  # 또는 tenancy_ocid와 동일
+
+# ========================================
+# SSH 접속 키
+# ========================================
+
+# SSH 공개키 (위에서 생성한 id_rsa.pub 파일 내용 전체를 붙여넣기)
 ssh_public_key   = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ..."
 ```
 
-#### 중요 참고사항
-- **SSH 접근**: SSH 프라이빗 키를 가진 모든 위치에서 접근 가능 (키 기반 인증)
-- **region**: 프리티어는 Home Region에서만 사용 가능
-- **ssh_public_key**: `~/.ssh/id_rsa.pub` 내용 복사 (없으면 `ssh-keygen`으로 생성)
+**각 항목 설명:**
+
+| 항목 | 설명 | 어디서 가져오나요? |
+|------|------|-------------------|
+| `tenancy_ocid` | OCI 테넌시 ID | API Key 생성 시 Configuration File Preview |
+| `user_ocid` | 사용자 ID | API Key 생성 시 Configuration File Preview |
+| `fingerprint` | API Key 지문 | API Key 생성 시 Configuration File Preview |
+| `region` | 리전 | API Key 생성 시 Configuration File Preview (예: ap-seoul-1) |
+| `private_key_path` | API 프라이빗 키 경로 | 다운로드한 `oci_api_key.pem` 파일의 **절대 경로** |
+| `compartment_ocid` | 구획 ID | tenancy_ocid와 동일하게 입력 (루트 사용 시) |
+| `ssh_public_key` | SSH 공개키 | `cat ~/.ssh/id_rsa.pub` 명령어로 출력된 전체 내용 |
+
+**주의사항:**
+- Windows에서 경로 입력 시 `/` 또는 `\\` 사용 (예: `C:/Users/...` 또는 `C:\\Users\\...`)
+- `ssh_public_key`는 `ssh-rsa AAAA...`로 시작하는 한 줄 전체를 복사해야 합니다
+- 모든 OCID는 따옴표로 감싸야 합니다
 
 ### 3단계: Terraform 배포
 
@@ -133,9 +205,20 @@ EOT
 
 #### 4-1. Master 노드 접속
 ```bash
-# 출력된 Reserved Public IP로 접속
-ssh ubuntu@<master_node_public_ip>
+# SSH로 접속 (다운로드한 SSH 프라이빗 키 사용)
+ssh -i /path/to/ssh-private-key ubuntu@<master_node_public_ip>
+
+# 예시:
+# OCI 콘솔에서 다운로드한 키 사용 시
+ssh -i ~/Downloads/ssh-key-2025-12-01.key ubuntu@132.145.xxx.xxx
+
+# 로컬에서 생성한 키 사용 시
+ssh -i ~/.ssh/id_rsa ubuntu@132.145.xxx.xxx
 ```
+
+**참고:** 
+- 기본 사용자명은 `ubuntu` (Ubuntu 이미지 기본 계정)
+- SSH 키 권한 오류 시: `chmod 600 /path/to/ssh-private-key`
 
 #### 4-2. 부트스트랩 검증
 ```bash
@@ -146,11 +229,47 @@ sudo /usr/local/bin/verify-k8s-setup.sh
 **확인할 항목**:
 - ✅ Swap: 0B (비활성화됨)
 - ✅ Containerd: active
-- ✅ Block Volume: `/data`에 마운트됨
+- ✅ iSCSI: active (Block Volume 연결 준비)
 - ✅ IP Forwarding: 1
 - ✅ iptables: VCN 내부 통신 허용
 
 **참고**: 인스턴스 생성 직후에는 부트스트랩이 실행 중일 수 있습니다. 5-10분 후 확인하세요.
+
+#### 4-3. Block Volume 연결 (선택사항)
+
+추가 스토리지가 필요한 경우 Block Volume을 연결할 수 있습니다.
+
+**연결 방법:**
+1. OCI 콘솔 → Compute → Instances → 해당 인스턴스 클릭
+2. Resources → Attached Block Volumes 클릭
+3. Block Volume 클릭 → "iSCSI Commands and Information" 탭
+4. 표시된 **iSCSI 명령어 3개**를 복사하여 인스턴스에서 실행
+
+**명령어 예시** (실제 값은 OCI 콘솔에서 각 노드마다 확인):
+```bash
+sudo iscsiadm -m node -o new -T iqn.2015-12.com.oracleiaas:xxxxxx -p xxx.xxx.x.x:3260
+sudo iscsiadm -m node -o update -T iqn.2015-12.com.oracleiaas:xxxxxx -n node.startup -v automatic
+sudo iscsiadm -m node -T iqn.2015-12.com.oracleiaas:xxxxxx -p xxx.xxx.x.x:3260 -l
+```
+
+**디스크 포맷 및 마운트** (처음 1회만):
+```bash
+# 연결된 디바이스 확인
+lsblk
+
+# 파일시스템 생성 (디바이스명은 lsblk에서 확인)
+sudo mkfs.ext4 /dev/sdb
+
+# 마운트
+sudo mkdir -p /data
+sudo mount /dev/sdb /data
+
+# 재부팅 후 자동 마운트
+UUID=$(sudo blkid -s UUID -o value /dev/sdb)
+echo "UUID=$UUID /data ext4 defaults,nofail,_netdev 0 2" | sudo tee -a /etc/fstab
+```
+
+**참고**: Block Volume이 필요없다면 이 단계를 건너뛰어도 됩니다.
 
 ### 5단계: Kubernetes 클러스터 초기화 (Master 노드)
 
@@ -260,8 +379,8 @@ curl http://<worker_public_ip>:31234
 |--------|-------------------|--------------|
 | **Compute (OCPU)** | 4 OCPU (2 인스턴스 × 2 OCPU) | 4 OCPU |
 | **Memory** | 24GB (2 인스턴스 × 12GB) | 24GB |
-| **Block Volume** | 100GB (2개 × 50GB) | 200GB |
-| **Boot Volume** | 100GB (2개 × 50GB) | 별도 계산 |
+| **Block Volume** | 100GB (2개 × 50GB) | 100GB |
+| **Boot Volume** | 100GB (2개 × 50GB) | 100GB |
 | **Reserved Public IP** | 1개 (Master 노드) | 1개 |
 | **Ephemeral Public IP** | 1개 (Worker 노드) | 무제한 |
 | **VCN** | 1개 | 2개 |
@@ -435,80 +554,7 @@ terraform show
 - Block Volume의 데이터는 영구적으로 삭제됩니다. 필요한 데이터는 미리 백업하세요.
 - Reserved Public IP도 함께 삭제됩니다.
 
-## � 트러블슈팅
-
-### SSH 접속 불가
-```bash
-# 1. Security List 확인 - admin_ip_cidr이 본인 IP와 일치하는지 확인
-curl -s https://ipinfo.io/ip
-
-# 2. 인스턴스 상태 확인 - OCI 콘솔에서 RUNNING 상태인지 확인
-
-# 3. 부트스트랩 로그 확인 (접속 가능한 경우)
-sudo cat /var/log/k8s-bootstrap.log
-```
-
-### Block Volume 마운트 안됨
-```bash
-# 1. iSCSI 연결 상태 확인
-sudo iscsiadm -m session
-
-# 2. 사용 가능한 디스크 확인
-lsblk
-
-# 3. 수동 마운트 시도
-# iSCSI 정보 확인
-curl -H "Authorization: Bearer Oracle" http://169.254.169.254/opc/v2/instance/iscsiVolumeAttachments/
-
-# 디바이스 찾아서 마운트
-sudo mkfs.ext4 /dev/sdb  # 디바이스명 확인 후 실행
-sudo mount /dev/sdb /data
-```
-
-### kubeadm init 실패
-```bash
-# 1. containerd 상태 확인
-sudo systemctl status containerd
-
-# 2. swap 비활성화 확인
-free -h  # Swap이 0이어야 함
-
-# 3. 네트워크 설정 확인
-sudo sysctl net.bridge.bridge-nf-call-iptables  # 1이어야 함
-sudo sysctl net.ipv4.ip_forward                  # 1이어야 함
-
-# 4. 초기화 재시도 (기존 설정 제거 후)
-sudo kubeadm reset -f
-sudo rm -rf /etc/cni/net.d
-sudo rm -rf $HOME/.kube
-```
-
-### Worker 노드 Join 실패
-```bash
-# 1. Master 노드에서 새 토큰 생성
-kubeadm token create --print-join-command
-
-# 2. Worker에서 네트워크 연결 확인
-ping <master_private_ip>
-nc -zv <master_private_ip> 6443
-
-# 3. 시간 동기화 확인 (양쪽 노드)
-timedatectl status
-```
-
-### Pod가 Pending 상태
-```bash
-# 1. CNI 설치 확인
-kubectl get pods -n kube-system | grep calico
-
-# 2. 노드 상태 확인
-kubectl describe node <node-name>
-
-# 3. Pod 이벤트 확인
-kubectl describe pod <pod-name>
-```
-
-## �📚 참고 문서
+## 📚 참고 문서
 
 - [OCI 프리티어 공식 문서](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier.htm)
 - [OCI Terraform Provider](https://registry.terraform.io/providers/oracle/oci/latest/docs)
@@ -527,16 +573,3 @@ kubectl describe pod <pod-name>
 7. **비용**: 프리티어 범위 내에서만 사용하면 완전 무료입니다.
 8. **부트스트랩 시간**: 인스턴스 생성 후 5-10분간 자동 설치가 진행됩니다. 바로 접속해도 설치가 완료되지 않았을 수 있습니다.
 
-## 🤝 Contributing
-
-버그 리포트, 기능 제안, PR을 환영합니다!
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

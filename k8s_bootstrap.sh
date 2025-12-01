@@ -184,7 +184,7 @@ echo "✓ containerd installed and configured"
 
 # 8. Kubernetes 컴포넌트 설치 (kubeadm, kubelet, kubectl)
 echo "Installing Kubernetes components..."
-sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+sudo apt-get install -y apt-transport-https ca-certificates curl gpg conntrack
 
 # Kubernetes 저장소 GPG 키 추가
 sudo mkdir -p /etc/apt/keyrings
@@ -204,158 +204,12 @@ sudo systemctl enable kubelet
 
 echo "✓ Kubernetes components installed."
 
-# 9. iSCSI 설치 및 Block Volume 설정
-echo "Configuring iSCSI for OCI Block Volumes..."
+# 9. iSCSI 설치 (Block Volume 연결을 위한 준비만 수행)
+echo "Installing iSCSI tools for Block Volume support..."
 sudo apt-get install -y open-iscsi lsscsi sg3-utils
 sudo systemctl start iscsid
 sudo systemctl enable iscsid
-
-setup_block_volume() {
-    # OCI 메타데이터 API URL
-    METADATA_URL="http://169.254.169.254/opc/v2/instance/"
-
-    # Block Volume 연결 대기 (최대 5분)
-    echo "Waiting for Block Volume attachment..."
-    MAX_WAIT=300
-    COUNTER=0
-    BLOCK_VOLUME_ATTACHED=false
-
-    while [ $COUNTER -lt $MAX_WAIT ]; do
-        ISCSI_INFO=$(curl -s -H "Authorization: Bearer Oracle" "${METADATA_URL}iscsiVolumeAttachments/" 2>/dev/null || echo "")
-        
-        if [ -n "$ISCSI_INFO" ] && [ "$ISCSI_INFO" != "[]" ]; then
-            echo "Block Volume attachment detected at $(date)"
-            
-            # jq를 사용한 안전한 JSON 파싱 (fallback으로 grep)
-            IQN=$(echo "$ISCSI_INFO" | jq -r '.[0].iqn // empty' 2>/dev/null || echo "$ISCSI_INFO" | grep -oP '"iqn":\s*"\K[^"]+' | head -1)
-            IPADDR=$(echo "$ISCSI_INFO" | jq -r '.[0].ipv4 // empty' 2>/dev/null || echo "$ISCSI_INFO" | grep -oP '"ipv4":\s*"\K[^"]+' | head -1)
-            PORT=$(echo "$ISCSI_INFO" | jq -r '.[0].port // empty' 2>/dev/null || echo "$ISCSI_INFO" | grep -oP '"port":\s*\K[0-9]+' | head -1)
-            
-            if [ -n "$IQN" ] && [ -n "$IPADDR" ]; then
-                echo "Connecting to iSCSI target: $IQN at $IPADDR:${PORT:-3260}"
-                
-                # iSCSI 연결 설정 (에러 무시하고 계속 진행)
-                sudo iscsiadm -m node -o new -T "$IQN" -p "$IPADDR:${PORT:-3260}" 2>/dev/null || true
-                sudo iscsiadm -m node -o update -T "$IQN" -n node.startup -v automatic 2>/dev/null || true
-                
-                # iSCSI 로그인 시도
-                if ! sudo iscsiadm -m node -T "$IQN" -p "$IPADDR:${PORT:-3260}" -l 2>/dev/null; then
-                    echo "⚠ iSCSI login failed, retrying..."
-                    sleep 3
-                    sudo iscsiadm -m node -T "$IQN" -p "$IPADDR:${PORT:-3260}" -l 2>/dev/null || true
-                fi
-                
-                # 디바이스 나타날 때까지 대기 (최대 60초)
-                echo "Waiting for block device to appear..."
-                DEVICE_WAIT=0
-                MAX_DEVICE_WAIT=60
-                DEVICE=""
-                
-                while [ $DEVICE_WAIT -lt $MAX_DEVICE_WAIT ]; do
-                    # OCI는 일반적으로 /dev/sdb, /dev/sdc 등으로 나타남
-                    # Boot volume이 아닌 새로운 디스크 찾기
-                    for candidate in /dev/sd[b-z] /dev/nvme[1-9]n1 /dev/oracleoci/oraclevd[b-z]; do
-                        if [ -b "$candidate" ]; then
-                            # 마운트되지 않은 디스크인지 확인
-                            if ! mount | grep -q "^$candidate"; then
-                                # 파티션이 아닌 전체 디스크인지 확인
-                                if lsblk -no TYPE "$candidate" 2>/dev/null | grep -q "^disk$"; then
-                                    DEVICE="$candidate"
-                                    echo "✓ Block device found: $DEVICE"
-                                    break 2
-                                fi
-                            fi
-                        fi
-                    done
-                    
-                    sleep 2
-                    DEVICE_WAIT=$((DEVICE_WAIT + 2))
-                    echo "  ... still waiting ($DEVICE_WAIT/$MAX_DEVICE_WAIT seconds)"
-                done
-                
-                if [ -n "$DEVICE" ] && [ -b "$DEVICE" ]; then
-                    MOUNT_POINT="/data"
-                    
-                    echo "Configuring Block Volume: $DEVICE"
-                    
-                    # 파일시스템 존재 확인 및 생성
-                    if ! sudo blkid "$DEVICE" | grep -q "TYPE=\"ext4\""; then
-                        echo "Creating ext4 filesystem on $DEVICE..."
-                        sudo mkfs.ext4 -F -L "k8s-data" "$DEVICE"
-                    else
-                        echo "ext4 filesystem already exists on $DEVICE"
-                    fi
-                    
-                    # 마운트 포인트 생성
-                    sudo mkdir -p "$MOUNT_POINT"
-                    
-                    # UUID 가져오기
-                    UUID=$(sudo blkid -s UUID -o value "$DEVICE")
-                    
-                    # /etc/fstab에 추가 (중복 방지)
-                    if ! grep -q "$UUID" /etc/fstab 2>/dev/null; then
-                        echo "UUID=$UUID $MOUNT_POINT ext4 defaults,nofail,_netdev 0 2" | sudo tee -a /etc/fstab
-                        echo "Added to /etc/fstab for automatic mounting on boot"
-                    fi
-                    
-                    # 마운트 실행
-                    if sudo mount -a; then
-                        sudo chown -R ubuntu:ubuntu "$MOUNT_POINT" 2>/dev/null || true
-                        BLOCK_VOLUME_ATTACHED=true
-                        
-                        echo "✅ Block Volume successfully mounted at $MOUNT_POINT"
-                        df -h "$MOUNT_POINT"
-                        return 0
-                    else
-                        echo "❌ Failed to mount $DEVICE"
-                    fi
-                else
-                    echo "⚠ Block device not detected after ${MAX_DEVICE_WAIT}s"
-                    echo "Available block devices:"
-                    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
-                fi
-            else
-                echo "⚠ Could not parse iSCSI connection details"
-            fi
-        fi
-        
-        sleep 5
-        COUNTER=$((COUNTER + 5))
-        if [ $((COUNTER % 30)) -eq 0 ]; then
-            echo "Still waiting for Block Volume... ($COUNTER/$MAX_WAIT seconds)"
-        fi
-    done
-
-    if [ "$BLOCK_VOLUME_ATTACHED" = false ]; then
-        echo ""
-        echo "⚠⚠⚠ WARNING: Block Volume not attached after ${MAX_WAIT}s ⚠⚠⚠"
-        echo "The instance will continue without the block volume."
-        echo "You can manually attach and mount it later."
-        echo ""
-        echo "To manually mount after attachment:"
-        echo "  1. Check iSCSI info: curl -H 'Authorization: Bearer Oracle' http://169.254.169.254/opc/v2/instance/iscsiVolumeAttachments/"
-        echo "  2. Find device: lsblk"
-        echo "  3. Format (if needed): sudo mkfs.ext4 /dev/sdX"
-        echo "  4. Mount: sudo mount /dev/sdX /data"
-        echo ""
-        echo "Available devices:"
-        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
-        return 1
-    fi
-}
-
-# set +e: 블록 볼륨 설정 중 에러가 발생해도 스크립트가 중단되지 않도록 함
-set +e
-setup_block_volume
-BLOCK_VOLUME_EXIT_CODE=$?
-set -e
-
-if [ $BLOCK_VOLUME_EXIT_CODE -eq 0 ]; then
-    echo "✓ Block volume setup completed successfully."
-else
-    echo "⚠ Block volume setup failed or timed out. Continuing with bootstrap..."
-fi
-
+echo "✓ iSCSI tools installed."
 
 # 10. 시스템 검증 스크립트
 cat <<'VERIFY_EOF' | sudo tee /usr/local/bin/verify-k8s-setup.sh
@@ -380,16 +234,13 @@ echo ""
 echo "6. Kubelet Status:"
 systemctl is-active kubelet || echo "Not started (expected before kubeadm init/join)"
 echo ""
-echo "7. Block Volume Mount:"
-df -h | grep /data || echo "⚠ Block volume not mounted"
+echo "7. iSCSI Service:"
+systemctl is-active iscsid
 echo ""
-echo "8. iSCSI Sessions:"
-sudo iscsiadm -m session 2>/dev/null || echo "No active iSCSI sessions"
-echo ""
-echo "9. iptables Rules (first 20 lines):"
+echo "8. iptables Rules (first 20 lines):"
 sudo iptables -L INPUT -n --line-numbers | head -20
 echo ""
-echo "10. Network Interfaces:"
+echo "9. Network Interfaces:"
 ip -br addr
 echo ""
 echo "=== Verification Complete ==="
