@@ -1,4 +1,3 @@
-# OCI Provider 
 terraform {
   required_providers {
     oci = {
@@ -8,7 +7,6 @@ terraform {
   }
 }
 
-# OCI 인증 정보 설정
 provider "oci" {
   tenancy_ocid     = var.tenancy_ocid
   user_ocid        = var.user_ocid

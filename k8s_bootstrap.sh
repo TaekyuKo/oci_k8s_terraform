@@ -1,15 +1,10 @@
-#!/bin/bash
-# 에러 발생 시 중단하지만 특정 섹션은 계속 진행
-# -e: 에러 시 중단, -o pipefail: 파이프 에러 감지
-# 주의: -u (unset variable) 사용 안함 - 빈 변수 허용 필요
 set -eo pipefail
 
 echo "=== Starting Kubernetes Bootstrap ==="
 exec > >(tee -a /var/log/k8s-bootstrap.log) 2>&1
 echo "Bootstrap started at: $(date)"
 
-# 0. 호스트 이름 설정 (OCI 메타데이터에서 인스턴스 이름 가져오기)
-echo "Setting hostname based on instance display name..."
+echo "Setting hostname..."
 INSTANCE_DISPLAY_NAME=$(curl -s -H "Authorization: Bearer Oracle" \
   http://169.254.169.254/opc/v2/instance/displayName 2>/dev/null || echo "")
 
@@ -21,8 +16,7 @@ else
     echo "⚠ Warning: Could not fetch instance display name, keeping default hostname"
 fi
 
-# 1. APT lock 대기 및 iptables-persistent 설치
-echo "Waiting for APT lock to be released..."
+echo "Waiting for APT lock..."
 while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
     echo "  ... waiting for other APT processes to finish"
     sleep 5
@@ -32,10 +26,7 @@ echo "Installing iptables-persistent and jq..."
 sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent jq curl
 
-# 2. 기존 REJECT 규칙 제거
 echo "Removing default REJECT rules..."
-
-# OCI의 기본 REJECT 규칙을 생성하는 서비스 비활성화
 sudo systemctl stop oracle-cloud-agent.service 2>/dev/null || true
 sudo systemctl disable oracle-cloud-agent.service 2>/dev/null || true
 sudo systemctl stop oracle-cloud-agent-updater 2>/dev/null || true
@@ -51,15 +42,12 @@ done
 while sudo iptables -C FORWARD -j REJECT --reject-with icmp-host-prohibited 2>/dev/null; do
     sudo iptables -D FORWARD -j REJECT --reject-with icmp-host-prohibited
 done
-
-# OCI 기본 iptables 규칙 파일 백업 및 무력화
 if [ -f /etc/iptables/rules.v4 ]; then
     sudo cp /etc/iptables/rules.v4 /etc/iptables/rules.v4.oci.backup
     sudo sed -i '/REJECT.*icmp-host-prohibited/d' /etc/iptables/rules.v4
 fi
 
-# 3. iptables 정책 및 규칙 설정
-echo "Configuring iptables for Kubernetes..."
+echo "Configuring iptables..."
 
 # 기본 정책을 ACCEPT로 변경
 sudo iptables -P INPUT ACCEPT
@@ -116,49 +104,35 @@ echo "✓ Kubernetes firewall rules configured and saved."
 # 4. Swap 비활성화 (Kubernetes 요구사항)
 echo "Disabling swap..."
 sudo swapoff -a
-# /etc/fstab에서 swap 항목 주석 처리 (재부팅 후에도 유지)
 sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 
-# 5. Kernel 모듈 로드 (컨테이너 네트워킹에 필요)
 echo "Configuring kernel modules..."
 cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
 overlay
 br_netfilter
 EOF
-# overlay: 컨테이너 파일시스템용
 sudo modprobe overlay
-# br_netfilter: 브리지 네트워크 필터링용
 sudo modprobe br_netfilter
 
-# 6. sysctl 파라미터 설정 (네트워크 브리지 및 IP 포워딩)
-echo "Configuring sysctl parameters..."
+echo "Configuring sysctl..."
 cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
 net.bridge.bridge-nf-call-iptables  = 1
 net.bridge.bridge-nf-call-ip6tables = 1
 net.ipv4.ip_forward                 = 1
 EOF
-# 설정 즉시 적용
 sudo sysctl --system
 
-# 7. containerd 설치 및 설정 (컨테이너 런타임)
 echo "Installing containerd..."
 sudo apt-get install -y containerd
 
-# containerd 설정 디렉토리 생성
 sudo mkdir -p /etc/containerd
 
-# 기존 설정 백업 (있는 경우)
 if [ -f /etc/containerd/config.toml ]; then
     sudo cp /etc/containerd/config.toml /etc/containerd/config.toml.backup
 fi
 
-# containerd 기본 설정 생성
 containerd config default | sudo tee /etc/containerd/config.toml > /dev/null
-
-# SystemdCgroup 활성화 (Kubernetes 권장 설정)
 sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-
-# containerd 재시작 및 활성화
 sudo systemctl restart containerd
 sudo systemctl enable containerd
 
@@ -173,26 +147,20 @@ for i in {1..30}; do
     sleep 1
 done
 
-# containerd 상태 확인
 if [ "$CONTAINERD_READY" = false ]; then
     echo "⚠ Warning: containerd failed to start"
     sudo systemctl status containerd
     exit 1
 fi
 
-echo "✓ containerd installed and configured"
+echo "✓ containerd ready"
 
-# 8. Kubernetes 컴포넌트 설치 (kubeadm, kubelet, kubectl)
-echo "Installing Kubernetes components..."
+echo "Installing Kubernetes..."
 sudo apt-get install -y apt-transport-https ca-certificates curl gpg conntrack
 
-# Kubernetes 저장소 GPG 키 추가
 sudo mkdir -p /etc/apt/keyrings
-# 기존 키 파일 삭제 후 새로 생성 (덮어쓰기 문제 방지)
 sudo rm -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-# Kubernetes 저장소 추가
 echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
 
 sudo apt-get update -qq

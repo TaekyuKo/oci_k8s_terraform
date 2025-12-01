@@ -1,6 +1,3 @@
-# =================================================================
-# 데이터 소스 (Data Sources)
-# =================================================================
 data "oci_identity_availability_domains" "ads" {
   compartment_id = var.compartment_ocid
 }
@@ -15,10 +12,8 @@ data "oci_core_images" "ubuntu_image" {
 }
 
 # =================================================================
-# 네트워크 (Networking)
-# =================================================================
-
-# VCN & Internet Gateway 
+# 네트워크
+# ================================================================= 
 resource "oci_core_vcn" "k8s_vcn" {
   compartment_id = var.compartment_ocid
   cidr_block     = "10.0.0.0/16"
@@ -32,7 +27,6 @@ resource "oci_core_internet_gateway" "k8s_igw" {
   display_name   = "k8s-igw"
 }
 
-# Public Subnet
 resource "oci_core_subnet" "public_subnet" {
   compartment_id    = var.compartment_ocid
   vcn_id            = oci_core_vcn.k8s_vcn.id
@@ -43,7 +37,6 @@ resource "oci_core_subnet" "public_subnet" {
   security_list_ids = [oci_core_security_list.k8s_sl.id]
 }
 
-# Route Table 
 resource "oci_core_route_table" "public_rt" {
   compartment_id = var.compartment_ocid
   vcn_id         = oci_core_vcn.k8s_vcn.id
@@ -56,7 +49,7 @@ resource "oci_core_route_table" "public_rt" {
 }
 
 # =================================================================
-# 보안 (Security)
+# 보안
 # =================================================================
 
 resource "oci_core_security_list" "k8s_sl" {
@@ -64,21 +57,18 @@ resource "oci_core_security_list" "k8s_sl" {
   vcn_id         = oci_core_vcn.k8s_vcn.id
   display_name   = "k8s-cluster-sl"
   
-  # 아웃바운드 트래픽 전체 허용
   egress_security_rules {
     protocol    = "all"
     destination = "0.0.0.0/0"
     description = "Allow all outbound traffic."
   }
   
-  # VCN 내부 통신 (Kubernetes Pod 간 통신 필수)
   ingress_security_rules {
     protocol    = "all"
     source      = "10.0.0.0/16"
-    description = "Allow all internal VCN traffic for Kubernetes."
+    description = "VCN internal traffic for Kubernetes."
   }
   
-  # SSH 접근 (SSH 키를 가진 모든 위치에서 접근 가능)
   ingress_security_rules {
     protocol    = "6"
     source      = "0.0.0.0/0"
@@ -86,10 +76,9 @@ resource "oci_core_security_list" "k8s_sl" {
       min = 22 
       max = 22 
     }
-    description = "Allow SSH access from anywhere (key-based authentication)."
+    description = "SSH access."
   }
   
-  # Kubernetes API Server 접근 (SSH 키를 가진 모든 위치에서 접근 가능)
   ingress_security_rules {
     protocol    = "6"
     source      = "0.0.0.0/0"
@@ -97,17 +86,15 @@ resource "oci_core_security_list" "k8s_sl" {
       min = 6443 
       max = 6443 
     }
-    description = "Allow Kubernetes API access from anywhere (requires proper authentication)."
+    description = "Kubernetes API Server."
   }
   
-  # ICMP (ping 테스트용)
   ingress_security_rules {
     protocol    = "1"
     source      = "0.0.0.0/0"
-    description = "Allow ICMP for ping."
+    description = "ICMP (ping)."
   }
   
-  # HTTP
   ingress_security_rules {
     protocol    = "6"
     source      = "0.0.0.0/0"
@@ -115,10 +102,9 @@ resource "oci_core_security_list" "k8s_sl" {
       min = 80 
       max = 80 
     }
-    description = "Allow HTTP traffic."
+    description = "HTTP."
   }
   
-  # HTTPS 
   ingress_security_rules {
     protocol    = "6"
     source      = "0.0.0.0/0"
@@ -126,10 +112,9 @@ resource "oci_core_security_list" "k8s_sl" {
       min = 443 
       max = 443 
     }
-    description = "Allow HTTPS traffic."
+    description = "HTTPS."
   }
   
-  # NodePort 서비스 
   ingress_security_rules {
     protocol    = "6"
     source      = "0.0.0.0/0"
@@ -137,15 +122,13 @@ resource "oci_core_security_list" "k8s_sl" {
       min = 30000 
       max = 32767 
     }
-    description = "Allow Kubernetes NodePort services."
+    description = "NodePort services."
   }
 }
 
 # =================================================================
-# 컴퓨트 및 스토리지 (Compute & Storage)
+# 컴퓨트 및 스토리지
 # =================================================================
-
-# --- Master Node ---
 resource "oci_core_instance" "k8s_master" {
   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
   compartment_id      = var.compartment_ocid
@@ -200,7 +183,6 @@ data "oci_core_vnic_attachments" "master_vnic_attachment" {
   instance_id         = oci_core_instance.k8s_master.id
 }
 
-# Master Node Block Volume
 resource "oci_core_volume" "master_bv" {
   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
   compartment_id      = var.compartment_ocid
@@ -213,12 +195,8 @@ resource "oci_core_volume_attachment" "master_bv_attachment" {
   instance_id     = oci_core_instance.k8s_master.id
   volume_id       = oci_core_volume.master_bv.id
   display_name    = "k8s-master-bv-attachment"
-  
-  # OCI 기본 설정 사용 (use_chap와 encryption은 기본값으로)
   device          = "/dev/oracleoci/oraclevdb"
 }
-
-# --- Worker Node ---
 resource "oci_core_instance" "k8s_worker" {
   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
   compartment_id      = var.compartment_ocid
@@ -267,7 +245,5 @@ resource "oci_core_volume_attachment" "worker_bv_attachment" {
   instance_id     = oci_core_instance.k8s_worker.id
   volume_id       = oci_core_volume.worker_bv.id
   display_name    = "k8s-worker-bv-attachment"
-  
-  # OCI 기본 설정 사용 (use_chap와 encryption은 기본값으로)
   device          = "/dev/oracleoci/oraclevdc"
 }
