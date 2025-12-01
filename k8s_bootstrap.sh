@@ -21,7 +21,13 @@ else
     echo "⚠ Warning: Could not fetch instance display name, keeping default hostname"
 fi
 
-# 1. iptables-persistent 먼저 설치 (REJECT 규칙 제거 전)
+# 1. APT lock 대기 및 iptables-persistent 설치
+echo "Waiting for APT lock to be released..."
+while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    echo "  ... waiting for other APT processes to finish"
+    sleep 5
+done
+
 echo "Installing iptables-persistent and jq..."
 sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent jq curl

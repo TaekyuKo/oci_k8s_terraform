@@ -159,7 +159,7 @@ resource "oci_core_instance" "k8s_master" {
   
   create_vnic_details {
     subnet_id                 = oci_core_subnet.public_subnet.id
-    assign_public_ip          = false 
+    assign_public_ip          = false
     assign_private_dns_record = true
     skip_source_dest_check    = true
   }
